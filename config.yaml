@@ -5,7 +5,7 @@ projects:
     deploy_command: "docker-compose up -d"
     services:
       auth-service:
-        deploy_command: "docker-compose up -d auth-service"
+        deploy_command: "docker compose up -d auth-service"
       standalone-service:
         working_directory: "/tmp/deployments/my-project/standalone-service"
         deploy_command: "./deploy.sh"

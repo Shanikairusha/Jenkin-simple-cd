@@ -72,3 +72,15 @@ func PullImage(workDir string, image string) error {
 	log.Printf("Pulling docker image %s", image)
 	return RunShellCommand(workDir, fmt.Sprintf("docker pull %s", image))
 }
+
+// LoadTarImage executes `docker load -i <path>` in the specified directory.
+func LoadTarImage(workDir string, tarPath string) error {
+	log.Printf("Loading docker image from tar: %s", tarPath)
+	return RunShellCommand(workDir, fmt.Sprintf("docker load -i %s", tarPath))
+}
+
+// DownloadGdown uses the 'gdown' cli to download a given file ID from google drive.
+func DownloadGdown(workDir string, fileID string, outPath string) error {
+	log.Printf("Downloading file from Google Drive (ID: %s) to %s", fileID, outPath)
+	return RunShellCommand(workDir, fmt.Sprintf("gdown %s -O %s", fileID, outPath))
+}

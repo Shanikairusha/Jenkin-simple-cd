@@ -5,18 +5,35 @@ A lightweight webhook agent written in Go that listens for deployment notificati
 ## Getting Started
 
 1. **Build the binary**:
-   ```bash
-   go build -o cd-agent main.go
-   ```
+   - For local testing: `go build -o cd-agent main.go`
+   - **For Linux Servers (from Windows)**: Run the included script:
+     ```powershell
+     .\build-linux.ps1
+     ```
+     This will generate a `cd-agent-linux` executable.
 
 2. **Configure the agent**:
    Create a `config.yaml` next to your binary. See [`config.yaml.example`] for a starting point.
 
-3. **Run the agent**:
+3. **Deploy to Server**:
+   Copy `cd-agent-linux`, `config.yaml`, `start.sh`, and `stop.sh` to your Linux server.
+
+4. **Run the agent**:
+   Make the scripts executable on the server if they aren't already:
    ```bash
-   ./cd-agent
+   chmod +x cd-agent-linux start.sh stop.sh
    ```
-   *Optionally, set this up as a `systemd` service or run it in `tmux`/background.*
+   
+   To run it in the background:
+   ```bash
+   ./start.sh
+   ```
+   *(This uses `nohup` to run the agent in the background, writes logs to `cd-agent.log`, and saves the process ID in `cd-agent.pid`)*
+
+   To stop the agent:
+   ```bash
+   ./stop.sh
+   ```
 
 ## Configuration Structure
 
@@ -61,7 +78,9 @@ pipeline {
                   -d '{
                         "project": "my-project",
                         "service": "auth-service",
-                        "image": "myregistry.com/auth:latest"
+                        "image": "myregistry.com/auth:latest",
+                        "tar_path": "/opt/docker/images/auth.tar",
+                        "gdrive_file_id": "1A2b3C4d5E6f7G8h9I0jKLmnoPqRst"
                       }'
                 '''
             }
@@ -70,4 +89,8 @@ pipeline {
 }
 ```
 
-*Note: If `"image"` is provided, the agent will aggressively run `docker pull <image>` before executing the `deploy_command`.*
+### Payload Options
+
+- `"image"`: If provided, the agent explicitly runs `docker pull <image>` before executing your deployment.
+- `"tar_path"`: If you are using `rclone` to mount direct `.tar` files to the server, provide the absolute path here. The agent will execute `docker load -i <tar_path>`.
+- `"gdrive_file_id"`: If you want the server to directly download a `.tar` from Google Drive before loading, provide the Google Drive File ID here AND provide a local `"tar_path"` indicating where it should be saved. *Requires the `gdown` Python package to be installed on your server (`pip install gdown`).*

@@ -11,9 +11,11 @@ import (
 
 // DeployPayload represents the expected JSON body from Jenkins.
 type DeployPayload struct {
-	Project string `json:"project"`
-	Service string `json:"service"`
-	Image   string `json:"image,omitempty"`
+	Project      string `json:"project"`
+	Service      string `json:"service"`
+	Image        string `json:"image,omitempty"`
+	TarPath      string `json:"tar_path,omitempty"`       // Local path to a .tar image (e.g. from rclone)
+	GdriveFileID string `json:"gdrive_file_id,omitempty"` // Google Drive File ID to download
 }
 
 // DeployHandler returns an http.Handler that processes the deployment webhooks.
@@ -32,8 +34,8 @@ func DeployHandler(cfg *config.Config) http.Handler {
 		}
 		defer r.Body.Close()
 
-		if payload.Project == "" || payload.Service == "" {
-			http.Error(w, "Bad Request: project and service are required", http.StatusBadRequest)
+		if payload.Project == "" {
+			http.Error(w, "Bad Request: 'project' is required", http.StatusBadRequest)
 			return
 		}
 
@@ -89,10 +91,27 @@ func DeployHandler(cfg *config.Config) http.Handler {
 
 		// Execute deployment asynchronously so we don't block the webhook response
 		go func() {
+			// Direct registry pull
 			if payload.Image != "" {
 				if err := executor.PullImage(workDir, payload.Image); err != nil {
 					log.Printf("Failed to pull image for %s/%s: %v", payload.Project, payload.Service, err)
-					// Optionally, we could choose to abort deployment, but let's try to proceed
+				}
+			}
+
+			// Google drive download then load
+			if payload.GdriveFileID != "" {
+				if payload.TarPath == "" {
+					payload.TarPath = "/tmp/gdrive-download.tar" // Default fallback destination
+				}
+				if err := executor.DownloadGdown(workDir, payload.GdriveFileID, payload.TarPath); err != nil {
+					log.Printf("Failed to download google drive image for %s/%s: %v", payload.Project, payload.Service, err)
+				}
+			}
+
+			// Local .tar load (Rclone, or downloaded via Gdrive just above)
+			if payload.TarPath != "" {
+				if err := executor.LoadTarImage(workDir, payload.TarPath); err != nil {
+					log.Printf("Failed to load local tar image for %s/%s: %v", payload.Project, payload.Service, err)
 				}
 			}
 
