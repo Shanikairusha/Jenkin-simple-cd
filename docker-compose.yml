@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  cd-agent:
+    build: .
+    container_name: cd-agent
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/Docker/Sampath:/opt/Docker/Sampath:rw
+      - /tmp/deployments/my-project:/tmp/deployments/my-project:rw
+    environment:
+      - PORT=8080
+      - CONFIG_PATH=/app/config.yaml
+    restart: unless-stopped

@@ -1,11 +1,57 @@
-api_token: "60b334f36db720a2c3a602bade68ae438de0a76855fabd73021288d4d5265c3b"
+api_token: "your-super-secret-token"
+
+# Deployment flow per request (all steps are optional, executed in order):
+#   1. image        → docker pull <image>
+#   2. gdrive_file_id + tar_path  → gdown <file_id> -O <tar_path>
+#   3. tar_path     → docker load -i <tar_path>
+#   4. deploy_command (from this file) → sh -c "<command>"
+#
+# tar_path and gdrive_file_id come from the webhook payload, NOT from this file.
+# deploy_command is the only deploy step defined here (trusted shell string).
+
 projects:
-  Sampath:
-    working_directory: "/opt/Docker/Sampath/"
-    deploy_command: "docker-compose up -d"
+  pd-qa:
+    working_directory: "/opt/Docker/pd-qa"
+    # Project-level fallback: redeploy all services at once
+    deploy_command: "docker compose pull && docker compose up -d"
     services:
-      auth-service:
-        deploy_command: "docker compose up -d auth-service"
-      standalone-service:
-        working_directory: "/tmp/deployments/my-project/standalone-service"
-        deploy_command: "./deploy.sh"
+
+      # --- Registry-pull services (image tag sent in webhook payload) ---
+      # GitLab CI payload: {"project":"pd-qa","service":"pd-discovery-service","image":"sysadminaffiniti/affiniti_dms_ms_discovery_server:pd-revamp-latest"}
+      pd-discovery-service:
+        deploy_command: "docker compose up -d --no-deps pd-discovery-service"
+
+      pd-api-gateway-service:
+        deploy_command: "docker compose up -d --no-deps pd-api-gateway-service"
+
+      pd-ms-system-aggregator-service:
+        deploy_command: "docker compose up -d --no-deps pd-ms-system-aggregator-service"
+
+      pd-ms-system-file-service:
+        deploy_command: "docker compose up -d --no-deps pd-ms-system-file-service"
+
+      pd-ms-activity-service:
+        deploy_command: "docker compose up -d --no-deps pd-ms-activity-service"
+
+      pd-ms-case-note-service:
+        deploy_command: "docker compose up -d --no-deps pd-ms-case-note-service"
+
+      pd-360-es-sv:
+        deploy_command: "docker compose up -d --no-deps pd-360-es-sv"
+
+      # --- Private registry / gdown-tar services ---
+      # These images come from the private registry or are distributed as tar files via Google Drive.
+      # GitLab CI saves the image as a tar and uploads it to Google Drive, then sends:
+      #   {"project":"pd-qa","service":"pd-ms-auth-service","gdrive_file_id":"<GDRIVE_ID>","tar_path":"/tmp/pd-ms-auth-service.tar"}
+      # The agent downloads the tar → loads it into Docker → runs the deploy_command below.
+      pd-ms-auth-service:
+        deploy_command: "docker compose up -d --no-deps pd-ms-auth-service"
+
+      pd-ms-contact-lead-service:
+        deploy_command: "docker compose up -d --no-deps pd-ms-contact-lead-service"
+
+      pd-crm-react-frontend:
+        deploy_command: "docker compose up -d --no-deps pd-crm-react-frontend"
+
+      pd-crm-web-jsp:
+        deploy_command: "docker compose up -d --no-deps pd-crm-web-jsp"

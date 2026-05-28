@@ -1,7 +1,7 @@
 package api
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -25,7 +25,7 @@ func AuthMiddleware(cfg *config.Config, next http.Handler) http.Handler {
 
 		token := parts[1]
 		if token != cfg.APIToken {
-			log.Printf("Failed authentication attempt from %s", r.RemoteAddr)
+			slog.Warn("failed authentication attempt", "remote_addr", r.RemoteAddr)
 			http.Error(w, "Unauthorized: invalid token", http.StatusUnauthorized)
 			return
 		}

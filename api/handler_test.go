@@ -5,9 +5,25 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"cd-agent/config"
+	"cd-agent/deployer"
 )
+
+type mockDeployer struct {
+	done    chan struct{}
+	lastReq deployer.Request
+}
+
+func newMockDeployer() *mockDeployer {
+	return &mockDeployer{done: make(chan struct{}, 1)}
+}
+
+func (m *mockDeployer) Deploy(req deployer.Request) {
+	m.lastReq = req
+	m.done <- struct{}{}
+}
 
 func TestAuthMiddleware(t *testing.T) {
 	cfg := &config.Config{
@@ -69,23 +85,25 @@ func TestDeployHandler(t *testing.T) {
 		},
 	}
 
-	handlerToTest := DeployHandler(cfg)
-
 	tests := []struct {
 		name           string
 		payload        string
 		expectedStatus int
+		expectDeploy   bool
 	}{
-		{"Valid Payload", `{"project":"test-proj", "service":"test-svc"}`, http.StatusAccepted},
-		{"Missing Project", `{"service":"test-svc"}`, http.StatusBadRequest},
-		{"Missing Service", `{"project":"test-proj"}`, http.StatusBadRequest},
-		{"Invalid JSON", `{"project":"test-=}!!`, http.StatusBadRequest},
-		{"Project Not Configured", `{"project":"missing-proj", "service":"test-svc"}`, http.StatusNotFound},
-		{"Service Not Configured", `{"project":"test-proj", "service":"missing-svc"}`, http.StatusNotFound},
+		{"Valid Payload", `{"project":"test-proj", "service":"test-svc"}`, http.StatusAccepted, true},
+		{"Missing Project", `{"service":"test-svc"}`, http.StatusBadRequest, false},
+		{"Project-level with no deploy_command", `{"project":"test-proj"}`, http.StatusBadRequest, false},
+		{"Invalid JSON", `{"project":"test-=}!!`, http.StatusBadRequest, false},
+		{"Project Not Configured", `{"project":"missing-proj", "service":"test-svc"}`, http.StatusNotFound, false},
+		{"Service Not Configured", `{"project":"test-proj", "service":"missing-svc"}`, http.StatusNotFound, false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			mock := newMockDeployer()
+			handlerToTest := DeployHandler(cfg, mock)
+
 			req, err := http.NewRequest("POST", "/deploy", bytes.NewBuffer([]byte(tc.payload)))
 			if err != nil {
 				t.Fatal(err)
@@ -98,6 +116,20 @@ func TestDeployHandler(t *testing.T) {
 			if status := rr.Code; status != tc.expectedStatus {
 				t.Errorf("handler returned wrong status code for %s: got %v want %v",
 					tc.name, status, tc.expectedStatus)
+			}
+
+			if tc.expectDeploy {
+				select {
+				case <-mock.done:
+				case <-time.After(time.Second):
+					t.Errorf("Deploy was not called within timeout for %s", tc.name)
+				}
+			} else {
+				select {
+				case <-mock.done:
+					t.Errorf("expected Deploy NOT to be called for %s, but it was", tc.name)
+				default:
+				}
 			}
 		})
 	}

@@ -44,5 +44,11 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("api_token is required in config")
 	}
 
+	for name, project := range cfg.Projects {
+		if project.WorkingDirectory == "" {
+			return nil, fmt.Errorf("project %q missing required 'working_directory'", name)
+		}
+	}
+
 	return &cfg, nil
 }

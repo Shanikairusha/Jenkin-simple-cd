@@ -2,11 +2,11 @@ package api
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"cd-agent/config"
-	"cd-agent/executor"
+	"cd-agent/deployer"
 )
 
 // DeployPayload represents the expected JSON body from Jenkins.
@@ -18,8 +18,8 @@ type DeployPayload struct {
 	GdriveFileID string `json:"gdrive_file_id,omitempty"` // Google Drive File ID to download
 }
 
-// DeployHandler returns an http.Handler that processes the deployment webhooks.
-func DeployHandler(cfg *config.Config) http.Handler {
+// DeployHandler returns an http.Handler that processes deployment webhooks.
+func DeployHandler(cfg *config.Config, d deployer.Deployer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -28,28 +28,30 @@ func DeployHandler(cfg *config.Config) http.Handler {
 
 		var payload DeployPayload
 		decoder := json.NewDecoder(r.Body)
+		defer r.Body.Close()
 		if err := decoder.Decode(&payload); err != nil {
 			http.Error(w, "Bad Request: invalid JSON payload", http.StatusBadRequest)
 			return
 		}
-		defer r.Body.Close()
 
 		if payload.Project == "" {
 			http.Error(w, "Bad Request: 'project' is required", http.StatusBadRequest)
 			return
 		}
 
-		log.Printf("Received deployment request: Project=%s, Service=%s, Image=%s", payload.Project, payload.Service, payload.Image)
+		slog.Info("received deployment request",
+			"project", payload.Project,
+			"service", payload.Service,
+			"image", payload.Image,
+		)
 
-		// Find the project configuration
 		projectConfig, ok := cfg.Projects[payload.Project]
 		if !ok {
-			log.Printf("Project not found in config: %s", payload.Project)
+			slog.Warn("project not found in config", "project", payload.Project)
 			http.Error(w, "Not Found: project not configured", http.StatusNotFound)
 			return
 		}
 
-		// If service is omitted, we assume project-level execution
 		var workDir, deployCommand string
 
 		if payload.Service == "" {
@@ -57,7 +59,7 @@ func DeployHandler(cfg *config.Config) http.Handler {
 			workDir = projectConfig.WorkingDirectory
 			deployCommand = projectConfig.DeployCommand
 			if deployCommand == "" {
-				log.Printf("No deploy_command configured for project %s", payload.Project)
+				slog.Warn("no deploy_command for project", "project", payload.Project)
 				http.Error(w, "Failed: no deployment command for project", http.StatusBadRequest)
 				return
 			}
@@ -65,7 +67,7 @@ func DeployHandler(cfg *config.Config) http.Handler {
 			// Service-level execution
 			serviceConfig, ok := projectConfig.Services[payload.Service]
 			if !ok {
-				log.Printf("Service not found in project %s: %s", payload.Project, payload.Service)
+				slog.Warn("service not found in project", "project", payload.Project, "service", payload.Service)
 				http.Error(w, "Not Found: service not configured for this project", http.StatusNotFound)
 				return
 			}
@@ -77,52 +79,27 @@ func DeployHandler(cfg *config.Config) http.Handler {
 			deployCommand = serviceConfig.DeployCommand
 
 			if deployCommand == "" {
-				log.Printf("No deploy_command configured for service %s in project %s", payload.Service, payload.Project)
+				slog.Warn("no deploy_command for service", "project", payload.Project, "service", payload.Service)
 				http.Error(w, "Failed: no deployment command for service", http.StatusBadRequest)
 				return
 			}
 		}
 
 		if workDir == "" {
-			log.Printf("No working directory configured for deployment of %s", payload.Project)
+			slog.Error("no working directory configured", "project", payload.Project)
 			http.Error(w, "Internal Server Error: no working directory configured", http.StatusInternalServerError)
 			return
 		}
 
-		// Execute deployment asynchronously so we don't block the webhook response
-		go func() {
-			// Direct registry pull
-			if payload.Image != "" {
-				if err := executor.PullImage(workDir, payload.Image); err != nil {
-					log.Printf("Failed to pull image for %s/%s: %v", payload.Project, payload.Service, err)
-				}
-			}
-
-			// Google drive download then load
-			if payload.GdriveFileID != "" {
-				if payload.TarPath == "" {
-					payload.TarPath = "/tmp/gdrive-download.tar" // Default fallback destination
-				}
-				if err := executor.DownloadGdown(workDir, payload.GdriveFileID, payload.TarPath); err != nil {
-					log.Printf("Failed to download google drive image for %s/%s: %v", payload.Project, payload.Service, err)
-				}
-			}
-
-			// Local .tar load (Rclone, or downloaded via Gdrive just above)
-			if payload.TarPath != "" {
-				if err := executor.LoadTarImage(workDir, payload.TarPath); err != nil {
-					log.Printf("Failed to load local tar image for %s/%s: %v", payload.Project, payload.Service, err)
-				}
-			}
-
-			log.Printf("Starting deployment for %s/%s", payload.Project, payload.Service)
-			// Pass the string securely to the executor, which will split it or pass it to bash
-			if err := executor.RunShellCommand(workDir, deployCommand); err != nil {
-				log.Printf("Deployment failed for %s/%s: %v", payload.Project, payload.Service, err)
-			} else {
-				log.Printf("Deployment successful for %s/%s", payload.Project, payload.Service)
-			}
-		}()
+		go d.Deploy(deployer.Request{
+			Project:       payload.Project,
+			Service:       payload.Service,
+			WorkDir:       workDir,
+			DeployCommand: deployCommand,
+			Image:         payload.Image,
+			TarPath:       payload.TarPath,
+			GdriveFileID:  payload.GdriveFileID,
+		})
 
 		w.WriteHeader(http.StatusAccepted)
 		w.Write([]byte("Deployment initiated\n"))

@@ -1,0 +1,198 @@
+version: "3.8"
+
+services:
+
+  pd-discovery-service:
+    image: sysadminaffiniti/affiniti_dms_ms_discovery_server:pd-revamp-latest
+    container_name: pd-new-discovery-service
+    networks:
+      - pd-qa-new-network
+    environment:
+      - "server.port=8400"
+      - "eureka.client.service-url.defaultZone=http://165.22.250.39:8500/eureka"
+    ports:
+      - "8500:8400"
+
+  pd-ms-auth-service:
+    image: affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_dms_ms_auth_service:pd-revamp-latest
+    container_name: pd-new-ms-auth-service
+    networks:
+      - pd-qa-new-network
+    environment:
+      - "server.port=8401"
+      - "spring.datasource.url=jdbc:mariadb://178.128.24.68:3306/pdcrmdev04?zeroDateTimeBehavior=convertToNull&useUnicode=true&characterEncoding=UTF-8&sendBlobAsBinary=true"
+      - "spring.datasource.username=pddevusr"
+      - "spring.datasource.password=password@123"
+      - "spring.config.use-legacy-processing=true"
+    ports:
+      - "8501:8401"
+
+  pd-api-gateway-service:
+    image: sysadminaffiniti/affiniti_dms_ms_api_gateway_service:pd-revamp-latest
+    container_name: pd-new-api-gateway-service
+    networks:
+      - pd-qa-new-network
+    depends_on:
+      - pd-discovery-service
+    environment:
+      - "server.port=8402"
+      - "eureka.client.serviceUrl.defaultZone=http://pd-discovery-service:8400/eureka"
+    ports:
+      - "9100:8402"
+
+  pd-ms-contact-lead-service:
+    image: affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_ms_dynamic_contact_and_lead:pd-revamp-latest
+    container_name: pd-new-ms-contact-lead-service
+    networks:
+      - pd-qa-new-network
+    environment:
+      - "server.port=8403"
+      - "spring.datasource.url=jdbc:mariadb://178.128.24.68:3306/pdcrmdev04?zeroDateTimeBehavior=convertToNull&useUnicode=true&characterEncoding=UTF-8&sendBlobAsBinary=true"
+      - "spring.datasource.username=pddevusr"
+      - "spring.datasource.password=password@123"
+      - "eureka.client.serviceUrl.defaultZone=http://pd-discovery-service:8400/eureka"
+      - "alliance.web.url=affiniti-crm.duckdns.org:8075/lg"
+      - "file.download.endpoint=https://affiniti-crm.duckdns.org:8108/api/system-file-service/v1/files/download/"
+      - "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://pd-ms-auth-service:8401/api/auth-service/oauth/jwks"
+      - "logging.level.org.springframework.security=DEBUG"
+      - "logging.level.org.springframework.security.oauth2=DEBUG"
+      - "logging.level.org.springframework.security.oauth2.server.authorization=DEBUG"
+      - "spring.config.use-legacy-processing=true"
+    ports:
+      - "8503:8403"
+    depends_on:
+      - pd-discovery-service
+      - pd-api-gateway-service
+
+  pd-ms-system-aggregator-service:
+    image: sysadminaffiniti/affiniti_dms_ms_system_aggregator_service:pd-revamp-latest
+    container_name: pd-new-ms-system-aggregator-service
+    networks:
+      - pd-qa-new-network
+    environment:
+      - "server.port=8404"
+      - "spring.datasource.url=jdbc:mariadb://178.128.24.68:3306/pdcrmdev04?zeroDateTimeBehavior=convertToNull"
+      - "spring.datasource.username=pddevusr"
+      - "spring.datasource.password=password@123"
+      - "eureka.client.serviceUrl.defaultZone=http://pd-discovery-service:8400/eureka"
+      - "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://pd-ms-auth-service:8401/api/auth-service/oauth/jwks"
+      - "proxy.path=https://affiniti-crm.duckdns.org:8075"
+    ports:
+      - "8504:8404"
+    depends_on:
+      - pd-discovery-service
+
+  pd-ms-system-file-service:
+    image: sysadminaffiniti/affiniti_dms_ms_system_file_service:pd-revamp-latest
+    container_name: pd-new-ms-system-file-service
+    networks:
+      - pd-qa-new-network
+    environment:
+      - "server.port=8405"
+      - "spring.datasource.url=jdbc:mariadb://178.128.24.68:3306/pdcrmdev04?zeroDateTimeBehavior=convertToNull"
+      - "spring.datasource.username=pddevusr"
+      - "spring.datasource.password=password@123"
+      - "eureka.client.serviceUrl.defaultZone=http://pd-discovery-service:8400/eureka"
+      - "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://pd-ms-auth-service:8401/api/auth-service/oauth/jwks"
+    ports:
+      - "7108:8405"
+    depends_on:
+      - pd-discovery-service
+
+  pd-ms-activity-service:
+    image: sysadminaffiniti/affiniti_dms_ms_activity_service:pd-revamp-latest
+    container_name: pd-new-ms-activity-service
+    networks:
+      - pd-qa-new-network
+    environment:
+      - "server.port=8406"
+      - "spring.datasource.url=jdbc:mariadb://178.128.24.68:3306/pdcrmdev04?zeroDateTimeBehavior=convertToNull"
+      - "spring.datasource.username=pddevusr"
+      - "spring.datasource.password=password@123"
+      - "eureka.client.serviceUrl.defaultZone=http://pd-discovery-service:8400/eureka"
+      - "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://pd-ms-auth-service:8401/api/auth-service/oauth/jwks"
+    ports:
+      - "8506:8406"
+    depends_on:
+      - pd-discovery-service
+
+  pd-ms-case-note-service:
+    image: sysadminaffiniti/affiniti_dms_ms_case_note_service:pd-revamp-latest
+    container_name: pd-new-ms-case-note-service
+    networks:
+      - pd-qa-new-network
+    environment:
+      - "server.port=8407"
+      - "spring.datasource.url=jdbc:mariadb://178.128.24.68:3306/pdcrmdev04?zeroDateTimeBehavior=convertToNull"
+      - "spring.datasource.username=pddevusr"
+      - "spring.datasource.password=password@123"
+      - "eureka.client.serviceUrl.defaultZone=http://pd-discovery-service:8400/eureka"
+      - "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://pd-ms-auth-service:8401/api/auth-service/oauth/jwks"
+      - "file.download.endpoint=https://affiniti-crm.duckdns.org:8108/api/system-file-service/v1/files/download/"
+    ports:
+      - "8507:8407"
+    depends_on:
+      - pd-discovery-service
+      - pd-ms-system-file-service
+
+  pd-crm-react-frontend:
+    image: affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_crm_react_front_end:pd-revamp-latest
+    container_name: pd-new-crm-react-frontend
+    networks:
+      - pd-qa-new-network
+    ports:
+      - "8508:80"
+    depends_on:
+      - pd-ms-contact-lead-service
+      - pd-ms-system-aggregator-service
+
+  pd-crm-web-jsp:
+    image: affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_crm_web_jsp:pd-revamp-latest
+    container_name: pd-new-crm-web-jsp
+    networks:
+      - pd-qa-new-network
+    environment:
+      - "server.port=8222"
+      - "spring.datasource.url=jdbc:mariadb://178.128.24.68:3306/pdcrmdev04?zeroDateTimeBehavior=convertToNull"
+      - "spring.datasource.username=pddevusr"
+      - "spring.datasource.password=password@123"
+      - "server.servlet.context-path=/lg/"
+      - "proxy.path=https://affiniti-crm.duckdns.org:8075/md"
+      - "auth.token.create.url=http://pd-ms-auth-service:8401/api/auth-service/oauth/token"
+      - "auth.token.refresh.url=http://pd-ms-auth-service:8401/api/auth-service/oauth/token"
+      - "auth.token.check.url=http://pd-ms-auth-service:8401/api/auth-service/oauth/check_token"
+      - "session.timeout.url=http://165.22.250.39:80/AFFINITI_DMS_FINANCE_WEB/?auth=logout"
+      - "jasper.host=178.128.92.244"
+      - "jasper.port=9191"
+      - "sla.about-to-violate.threshold=0.75"
+    ports:
+      - "8509:8222"
+    depends_on:
+      - pd-ms-auth-service
+
+  pd-360-es-sv:
+    image: sysadminaffiniti/affiniti_hnbf_360_es_sv:pd-revamp-latest
+    container_name: pd-new-360-es-sv
+    networks:
+      - pd-qa-new-network
+    environment:
+      - "spring.datasource.url=jdbc:mariadb://178.128.24.68:3306/pdcrmdev04?zeroDateTimeBehavior=convertToNull"
+      - "spring.datasource.username=pddevusr"
+      - "spring.datasource.password=password@123"
+      - "cronjob.execution.hrs=11"
+      - "cronjob.execution.min=45"
+      - "cronjob.delay=100000"
+      - "cronjob.start.time=08:00:00"
+      - "cronjob.end.time=20:00:00"
+      - "leadscoreupdate.cronjob.ticket.run=true"
+      - "leadscoreupdate.cronjob.ticket.executiontime=0 40 14 * * *"
+      - "leadscoreupdate.cronjob.contact.run=true"
+      - "leadscoreupdate.cronjob.contact.executiontime=0 40 15 * * *"
+      - "sla.violation.send.escalation.email=true"
+      - "crosssell.cronjob.run=true"
+      - "crosssell.cronjob.executiontime=100000"
+      - "sla.violation.email.executiontime=0 47 17 * * *"
+
+networks:
+  pd-qa-new-network:
+    external: false
