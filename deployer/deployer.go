@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"cd-agent/executor"
+	"cd-agent/store"
 )
 
 // Request holds the resolved, validated parameters for a single deployment run.
@@ -27,18 +29,52 @@ type Deployer interface {
 }
 
 // DefaultDeployer is the production implementation backed by the executor package.
-type DefaultDeployer struct{}
+type DefaultDeployer struct {
+	store *store.Store // nil-safe: if nil, no records are written
+}
 
-func New() *DefaultDeployer {
-	return &DefaultDeployer{}
+func New(s *store.Store) *DefaultDeployer {
+	return &DefaultDeployer{store: s}
 }
 
 func (d *DefaultDeployer) Deploy(req Request) {
 	log := slog.With("project", req.Project, "service", req.Service)
 
+	var rec *store.DeployRecord
+	if d.store != nil {
+		rec = &store.DeployRecord{
+			ID:        store.GenerateID(),
+			Project:   req.Project,
+			Service:   req.Service,
+			Image:     req.Image,
+			Status:    store.StatusRunning,
+			StartTime: time.Now(),
+		}
+		d.store.Add(rec)
+	}
+
+	appendLog := func(line string) {
+		if rec != nil {
+			rec.AppendLog(line)
+		}
+	}
+
+	success := true
+
 	if req.Image != "" {
-		if err := executor.PullImage(req.WorkDir, req.Image); err != nil {
+		out, err := executor.PullImage(req.WorkDir, req.Image)
+		if err != nil {
 			log.Error("failed to pull image", "error", err)
+			appendLog(fmt.Sprintf("PULL ERROR: %v", err))
+			if out != "" {
+				appendLog(out)
+			}
+			success = false
+		} else {
+			appendLog("PULL OK: " + req.Image)
+			if out != "" {
+				appendLog(out)
+			}
 		}
 	}
 
@@ -47,15 +83,37 @@ func (d *DefaultDeployer) Deploy(req Request) {
 		if tarPath == "" {
 			tarPath = "/tmp/gdrive-download.tar"
 		}
-		if err := executor.DownloadGdown(req.WorkDir, req.GdriveFileID, tarPath); err != nil {
+		out, err := executor.DownloadGdown(req.WorkDir, req.GdriveFileID, tarPath)
+		if err != nil {
 			log.Error("failed to download from Google Drive", "error", err)
+			appendLog(fmt.Sprintf("GDOWN ERROR: %v", err))
+			if out != "" {
+				appendLog(out)
+			}
+			success = false
+		} else {
+			appendLog("GDOWN OK: " + tarPath)
+			if out != "" {
+				appendLog(out)
+			}
 		}
 		req.TarPath = tarPath
 	}
 
 	if req.TarPath != "" {
-		if err := executor.LoadTarImage(req.WorkDir, req.TarPath); err != nil {
+		out, err := executor.LoadTarImage(req.WorkDir, req.TarPath)
+		if err != nil {
 			log.Error("failed to load tar image", "error", err)
+			appendLog(fmt.Sprintf("LOAD ERROR: %v", err))
+			if out != "" {
+				appendLog(out)
+			}
+			success = false
+		} else {
+			appendLog("LOAD OK: " + req.TarPath)
+			if out != "" {
+				appendLog(out)
+			}
 		}
 	}
 
@@ -64,16 +122,33 @@ func (d *DefaultDeployer) Deploy(req Request) {
 	if req.Image != "" && req.Service != "" {
 		if err := updateEnvFile(req.WorkDir, req.Service, req.Image); err != nil {
 			log.Error("failed to update .env file", "error", err)
+			appendLog(fmt.Sprintf("ENV UPDATE ERROR: %v", err))
+			success = false
 		} else {
 			log.Info("updated .env with image", "image", req.Image)
+			appendLog("ENV UPDATE OK: " + req.Image)
 		}
 	}
 
 	log.Info("starting deploy command")
-	if err := executor.RunShellCommand(req.WorkDir, req.DeployCommand); err != nil {
+	out, err := executor.RunShellCommand(req.WorkDir, req.DeployCommand)
+	if err != nil {
 		log.Error("deployment failed", "error", err)
+		appendLog(fmt.Sprintf("DEPLOY ERROR: %v", err))
+		if out != "" {
+			appendLog(out)
+		}
+		success = false
 	} else {
 		log.Info("deployment succeeded")
+		appendLog("DEPLOY OK")
+		if out != "" {
+			appendLog(out)
+		}
+	}
+
+	if rec != nil {
+		rec.Complete(success, time.Now())
 	}
 }
 
