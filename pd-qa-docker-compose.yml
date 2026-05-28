@@ -1,9 +1,13 @@
 version: "3.8"
 
+# Image tags are managed via .env in this directory.
+# The CD agent writes PD_<SERVICE>_IMAGE=<registry>/<name>:<tag> on each deploy.
+# Rollback: edit .env, then: docker compose up -d --no-deps <service>
+
 services:
 
   pd-discovery-service:
-    image: sysadminaffiniti/affiniti_dms_ms_discovery_server:pd-revamp-latest
+    image: ${PD_DISCOVERY_SERVICE_IMAGE:-sysadminaffiniti/affiniti_dms_ms_discovery_server:pd-revamp-latest}
     container_name: pd-new-discovery-service
     networks:
       - pd-qa-new-network
@@ -14,7 +18,7 @@ services:
       - "8500:8400"
 
   pd-ms-auth-service:
-    image: affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_dms_ms_auth_service:pd-revamp-latest
+    image: ${PD_MS_AUTH_SERVICE_IMAGE:-affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_dms_ms_auth_service:pd-revamp-latest}
     container_name: pd-new-ms-auth-service
     networks:
       - pd-qa-new-network
@@ -28,7 +32,7 @@ services:
       - "8501:8401"
 
   pd-api-gateway-service:
-    image: sysadminaffiniti/affiniti_dms_ms_api_gateway_service:pd-revamp-latest
+    image: ${PD_API_GATEWAY_SERVICE_IMAGE:-sysadminaffiniti/affiniti_dms_ms_api_gateway_service:pd-revamp-latest}
     container_name: pd-new-api-gateway-service
     networks:
       - pd-qa-new-network
@@ -41,7 +45,7 @@ services:
       - "9100:8402"
 
   pd-ms-contact-lead-service:
-    image: affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_ms_dynamic_contact_and_lead:pd-revamp-latest
+    image: ${PD_MS_CONTACT_LEAD_SERVICE_IMAGE:-affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_ms_dynamic_contact_and_lead:pd-revamp-latest}
     container_name: pd-new-ms-contact-lead-service
     networks:
       - pd-qa-new-network
@@ -65,7 +69,7 @@ services:
       - pd-api-gateway-service
 
   pd-ms-system-aggregator-service:
-    image: sysadminaffiniti/affiniti_dms_ms_system_aggregator_service:pd-revamp-latest
+    image: ${PD_MS_SYSTEM_AGGREGATOR_SERVICE_IMAGE:-sysadminaffiniti/affiniti_dms_ms_system_aggregator_service:pd-revamp-latest}
     container_name: pd-new-ms-system-aggregator-service
     networks:
       - pd-qa-new-network
@@ -83,7 +87,7 @@ services:
       - pd-discovery-service
 
   pd-ms-system-file-service:
-    image: sysadminaffiniti/affiniti_dms_ms_system_file_service:pd-revamp-latest
+    image: ${PD_MS_SYSTEM_FILE_SERVICE_IMAGE:-sysadminaffiniti/affiniti_dms_ms_system_file_service:pd-revamp-latest}
     container_name: pd-new-ms-system-file-service
     networks:
       - pd-qa-new-network
@@ -100,7 +104,7 @@ services:
       - pd-discovery-service
 
   pd-ms-activity-service:
-    image: sysadminaffiniti/affiniti_dms_ms_activity_service:pd-revamp-latest
+    image: ${PD_MS_ACTIVITY_SERVICE_IMAGE:-sysadminaffiniti/affiniti_dms_ms_activity_service:pd-revamp-latest}
     container_name: pd-new-ms-activity-service
     networks:
       - pd-qa-new-network
@@ -117,7 +121,7 @@ services:
       - pd-discovery-service
 
   pd-ms-case-note-service:
-    image: sysadminaffiniti/affiniti_dms_ms_case_note_service:pd-revamp-latest
+    image: ${PD_MS_CASE_NOTE_SERVICE_IMAGE:-sysadminaffiniti/affiniti_dms_ms_case_note_service:pd-revamp-latest}
     container_name: pd-new-ms-case-note-service
     networks:
       - pd-qa-new-network
@@ -136,7 +140,7 @@ services:
       - pd-ms-system-file-service
 
   pd-crm-react-frontend:
-    image: affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_crm_react_front_end:pd-revamp-latest
+    image: ${PD_CRM_REACT_FRONTEND_IMAGE:-affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_crm_react_front_end:pd-revamp-latest}
     container_name: pd-new-crm-react-frontend
     networks:
       - pd-qa-new-network
@@ -147,7 +151,7 @@ services:
       - pd-ms-system-aggregator-service
 
   pd-crm-web-jsp:
-    image: affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_crm_web_jsp:pd-revamp-latest
+    image: ${PD_CRM_WEB_JSP_IMAGE:-affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_crm_web_jsp:pd-revamp-latest}
     container_name: pd-new-crm-web-jsp
     networks:
       - pd-qa-new-network
@@ -171,7 +175,7 @@ services:
       - pd-ms-auth-service
 
   pd-360-es-sv:
-    image: sysadminaffiniti/affiniti_hnbf_360_es_sv:pd-revamp-latest
+    image: ${PD_360_ES_SV_IMAGE:-sysadminaffiniti/affiniti_hnbf_360_es_sv:pd-revamp-latest}
     container_name: pd-new-360-es-sv
     networks:
       - pd-qa-new-network

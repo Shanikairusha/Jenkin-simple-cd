@@ -71,13 +71,14 @@ projects:
 
 ## Deployment Methods
 
-The agent supports three image delivery methods. They are **not mutually exclusive** — all three are checked in order per request:
+The agent supports three image delivery methods. They are **not mutually exclusive** — all steps are checked in order per request:
 
 ```
 1. image         →  docker pull <image>
 2. gdrive_file_id + tar_path  →  gdown <file_id> -O <tar_path>  then  docker load -i <tar_path>
 3. tar_path only →  docker load -i <tar_path>   (tar already on server, e.g. via rclone)
-4. deploy_command (always runs last)
+4. .env updated  →  <workDir>/.env: SERVICE_IMAGE=<image>  (version tracking, only if image + service both set)
+5. deploy_command (always runs last)
 ```
 
 ### Method 1 — Registry Pull
@@ -89,13 +90,14 @@ CI pushes the image to a registry; the agent pulls it on the server.
 {
   "project": "pd-qa",
   "service": "pd-discovery-service",
-  "image": "sysadminaffiniti/affiniti_dms_ms_discovery_server:pd-revamp-latest"
+  "image": "sysadminaffiniti/affiniti_dms_ms_discovery_server:1.0.0-45"
 }
 ```
 
 **What the agent does:**
-1. `docker pull sysadminaffiniti/affiniti_dms_ms_discovery_server:pd-revamp-latest`
-2. Runs `deploy_command` from config
+1. `docker pull sysadminaffiniti/affiniti_dms_ms_discovery_server:1.0.0-45`
+2. Writes `PD_DISCOVERY_SERVICE_IMAGE=sysadminaffiniti/affiniti_dms_ms_discovery_server:1.0.0-45` to `<workDir>/.env`
+3. Runs `deploy_command` from config
 
 ---
 
@@ -113,36 +115,43 @@ pip install gdown
 {
   "project": "pd-qa",
   "service": "pd-ms-auth-service",
+  "image": "affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_dms_ms_auth_service:1.0.0-45",
   "gdrive_file_id": "1A2b3C4d5E6f7G8h9I0jKLmnoPqRst",
   "tar_path": "/tmp/pd-ms-auth-service.tar"
 }
 ```
 
 **What the agent does:**
-1. `gdown 1A2b3C4d5E6f7G8h9I0jKLmnoPqRst -O /tmp/pd-ms-auth-service.tar`
-2. `docker load -i /tmp/pd-ms-auth-service.tar`
-3. Runs `deploy_command` from config
+1. `docker pull ...` — may fail if server can't reach the private registry; error is logged and execution continues
+2. `gdown 1A2b3C4d5E6f7G8h9I0jKLmnoPqRst -O /tmp/pd-ms-auth-service.tar`
+3. `docker load -i /tmp/pd-ms-auth-service.tar`
+4. Writes `PD_MS_AUTH_SERVICE_IMAGE=affiniti-crm.duckdns.org:8080/.../auth:1.0.0-45` to `<workDir>/.env`
+5. Runs `deploy_command` from config
 
-> `tar_path` is where the file is saved on the server. If omitted, it defaults to `/tmp/gdrive-download.tar`.
+> Always include `image` in the payload even for gdown/tar deployments — it's used to update the `.env` version record for rollback. The actual image comes from the tar; the pull failure is harmless.
+
+> `tar_path` is where the tar is saved on the server. Defaults to `/tmp/gdrive-download.tar` if omitted.
 
 **GitLab CI — save and upload the tar:**
 ```yaml
 deploy:
   stage: deploy
   script:
-    # Build and save image as tar
-    - docker build -t pd-ms-auth-service:latest .
-    - docker save pd-ms-auth-service:latest -o auth-service.tar
-    # Upload to Google Drive using gdrive or rclone, capture the file ID
+    # Build with a versioned tag using CI pipeline number
+    - IMAGE="affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_dms_ms_auth_service:1.0.0-${CI_PIPELINE_IID}"
+    - docker build -t "$IMAGE" .
+    - docker save "$IMAGE" -o auth-service.tar
+    # Upload to Google Drive, capture the file ID
     - GDRIVE_FILE_ID=$(gdrive files upload auth-service.tar --parent <FOLDER_ID> --json | jq -r '.id')
     # Trigger the CD agent
     - |
-      curl -s -X POST http://<VM_IP>:8080/api/v1/deploy \
+      curl -sf -X POST http://<VM_IP>:8080/api/v1/deploy \
         -H "Authorization: Bearer your-super-secret-token" \
         -H "Content-Type: application/json" \
         -d "{
               \"project\": \"pd-qa\",
               \"service\": \"pd-ms-auth-service\",
+              \"image\": \"$IMAGE\",
               \"gdrive_file_id\": \"$GDRIVE_FILE_ID\",
               \"tar_path\": \"/tmp/pd-ms-auth-service.tar\"
             }"
@@ -169,6 +178,41 @@ The tar is already on the server (e.g. synced via rclone). Just pass `tar_path` 
 
 ---
 
+## Version Tracking & Rollback
+
+Every time the agent deploys a service with an `image` field in the payload, it writes a `KEY=VALUE` line to `<working_directory>/.env`. Docker Compose reads this file automatically, so the correct versioned image is used on every subsequent `docker compose up`.
+
+**Key naming convention:** service name → uppercase + underscores + `_IMAGE`
+- `pd-ms-auth-service` → `PD_MS_AUTH_SERVICE_IMAGE`
+- `pd-discovery-service` → `PD_DISCOVERY_SERVICE_IMAGE`
+
+**Example `.env` after several deployments:**
+```
+PD_DISCOVERY_SERVICE_IMAGE=sysadminaffiniti/affiniti_dms_ms_discovery_server:1.0.0-45
+PD_MS_AUTH_SERVICE_IMAGE=affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_dms_ms_auth_service:1.2.1-89
+PD_CRM_REACT_FRONTEND_IMAGE=affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_crm_react_front_end:2.0.0-102
+```
+
+**The `pd-qa-docker-compose.yml` uses `${VAR:-default}` substitution:**
+```yaml
+image: ${PD_MS_AUTH_SERVICE_IMAGE:-affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_dms_ms_auth_service:pd-revamp-latest}
+```
+If the `.env` entry is missing (first deploy), the default tag is used.
+
+### Rolling back a service
+
+```bash
+# On the VM, in the docker-compose directory
+nano .env
+# Change: PD_MS_AUTH_SERVICE_IMAGE=...auth:1.2.1-89
+# To:     PD_MS_AUTH_SERVICE_IMAGE=...auth:1.1.0-72
+
+docker compose up -d --no-deps pd-ms-auth-service
+# Docker Compose detects the image change and recreates the container
+```
+
+---
+
 ## Calling from GitLab CI
 
 Full `.gitlab-ci.yml` example covering all three methods:
@@ -178,28 +222,31 @@ variables:
   CD_AGENT_URL: "http://<VM_IP>:8080/api/v1/deploy"
   CD_TOKEN: "your-super-secret-token"
 
-# Method 1: registry pull
+# Method 1: registry pull with versioned tag
 deploy-discovery:
   stage: deploy
   script:
+    - IMAGE="sysadminaffiniti/affiniti_dms_ms_discovery_server:1.0.0-${CI_PIPELINE_IID}"
+    - docker build -t "$IMAGE" . && docker push "$IMAGE"
     - |
       curl -sf -X POST "$CD_AGENT_URL" \
         -H "Authorization: Bearer $CD_TOKEN" \
         -H "Content-Type: application/json" \
-        -d '{"project":"pd-qa","service":"pd-discovery-service","image":"sysadminaffiniti/affiniti_dms_ms_discovery_server:pd-revamp-latest"}'
+        -d "{\"project\":\"pd-qa\",\"service\":\"pd-discovery-service\",\"image\":\"$IMAGE\"}"
 
-# Method 2: gdown tar from Google Drive
+# Method 2: gdown tar from Google Drive with versioned tag
 deploy-auth:
   stage: deploy
   script:
-    - docker build -t pd-ms-auth-service:latest .
-    - docker save pd-ms-auth-service:latest -o auth.tar
+    - IMAGE="affiniti-crm.duckdns.org:8080/sysadminaffiniti/affiniti_dms_ms_auth_service:1.0.0-${CI_PIPELINE_IID}"
+    - docker build -t "$IMAGE" .
+    - docker save "$IMAGE" -o auth.tar
     - GDRIVE_ID=$(gdrive files upload auth.tar --parent $GDRIVE_FOLDER_ID --json | jq -r '.id')
     - |
       curl -sf -X POST "$CD_AGENT_URL" \
         -H "Authorization: Bearer $CD_TOKEN" \
         -H "Content-Type: application/json" \
-        -d "{\"project\":\"pd-qa\",\"service\":\"pd-ms-auth-service\",\"gdrive_file_id\":\"$GDRIVE_ID\",\"tar_path\":\"/tmp/pd-ms-auth-service.tar\"}"
+        -d "{\"project\":\"pd-qa\",\"service\":\"pd-ms-auth-service\",\"image\":\"$IMAGE\",\"gdrive_file_id\":\"$GDRIVE_ID\",\"tar_path\":\"/tmp/pd-ms-auth-service.tar\"}"
 
 # Deploy all services at once (project-level, no service key)
 deploy-all:

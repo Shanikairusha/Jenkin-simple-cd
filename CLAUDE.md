@@ -50,6 +50,7 @@ executor/        – thin wrappers around os/exec
    - `image` set → `executor.PullImage` → `docker pull <image>`
    - `gdrive_file_id` set → `executor.DownloadGdown` → `gdown <file_id> -O <tar_path>`
    - `tar_path` set → `executor.LoadTarImage` → `docker load -i <tar_path>`
+   - `image` + `service` both set → `updateEnvFile` → writes `SERVICE_IMAGE=<image>` to `<workDir>/.env`
    - always → `executor.RunShellCommand` → `sh -c "<deploy_command>"`
 
 ---
@@ -64,12 +65,13 @@ Send `image` in the payload. Agent runs `docker pull` then the deploy command.
 ```
 
 ### Method 2 — Google Drive tar (gdown)
-Send `gdrive_file_id` + `tar_path`. Agent downloads the tar via `gdown`, loads it with `docker load`, then runs the deploy command. Requires `gdown` installed on the server (`pip install gdown`).
+Send `gdrive_file_id` + `tar_path` + `image`. Agent downloads the tar via `gdown`, loads it with `docker load`, updates `.env`, then runs the deploy command. Requires `gdown` installed on the server (`pip install gdown`).
 
 ```json
-{"project":"pd-qa","service":"pd-ms-auth-service","gdrive_file_id":"1A2b3C4d5E6f7G8h9I0jKLmnoPqRst","tar_path":"/tmp/pd-ms-auth-service.tar"}
+{"project":"pd-qa","service":"pd-ms-auth-service","image":"registry/auth:1.0.0-45","gdrive_file_id":"1A2b3C4d5E6f7G8h9I0jKLmnoPqRst","tar_path":"/tmp/pd-ms-auth-service.tar"}
 ```
 
+- `image` is required even for gdown/tar deployments so the `.env` version record is updated. The pull step may fail if the server can't reach the private registry — this is non-fatal; the tar provides the actual image.
 - `tar_path` is the save location on the server. Defaults to `/tmp/gdrive-download.tar` if omitted.
 
 ### Method 3 — Local tar (pre-placed)
@@ -103,6 +105,22 @@ These are the four functions in `executor/executor.go`. All use `exec.Command` d
 **Command injection boundary:**
 - `RunCommand` / `PullImage` / `LoadTarImage` / `DownloadGdown` — safe to call with HTTP payload data; args pass directly to `exec.Command`.
 - `RunShellCommand` — **only** for `deploy_command` from `config.yaml`. Never pass payload data here.
+
+---
+
+## Version Tracking (.env file)
+
+`deployer.updateEnvFile(workDir, serviceName, image)` (in `deployer/deployer.go`) maintains `<workDir>/.env`. It is called after tar load and before the deploy command whenever both `req.Image` and `req.Service` are non-empty.
+
+**Key derivation:** `strings.ToUpper(strings.ReplaceAll(serviceName, "-", "_")) + "_IMAGE"`
+- `pd-ms-auth-service` → `PD_MS_AUTH_SERVICE_IMAGE`
+- `pd-discovery-service` → `PD_DISCOVERY_SERVICE_IMAGE`
+
+Docker Compose reads `.env` automatically. The compose file uses `${VAR:-default}` so the default tag applies if no `.env` entry exists yet (e.g. first deploy or manual `docker compose up`).
+
+The write is atomic: data is written to a temp file in the same directory, then renamed over `.env`, preventing partial writes if the process is interrupted.
+
+**Rollback:** edit the relevant line in `.env`, then `docker compose up -d --no-deps <service>`.
 
 ---
 
