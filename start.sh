@@ -26,7 +26,7 @@ if [ ! -x "$BINARY" ]; then
 fi
 
 # Run in the background using nohup
-nohup $BINARY > "$LOG_FILE" 2>&1 &
+nohup $BINARY -port 8088 > "$LOG_FILE" 2>&1 &
 NEW_PID=$!
 
 # Save the process ID to a file so we can stop it later
