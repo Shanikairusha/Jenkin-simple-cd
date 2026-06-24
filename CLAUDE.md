@@ -20,9 +20,12 @@ go test ./...
 go test ./api/ -run TestDeployHandler
 go test ./api/ -run TestAuthMiddleware
 
-# Run with custom port or config path
+# Run with custom port or config path (env vars PORT / CONFIG_PATH override these flags)
 ./cd-agent -port 9090 -config /etc/cd-agent/config.yaml
+PORT=9090 CONFIG_PATH=/etc/cd-agent/config.yaml ./cd-agent
 ```
+
+The web/ SPA is embedded into the binary at build time (`//go:embed`), so the dashboard is served at `http://<host>:<port>/` with no extra files to deploy.
 
 On the Linux server: copy `cd-agent-linux`, `config.yaml`, `start.sh`, `stop.sh`. Use `./start.sh` / `./stop.sh` to manage the daemon (PID file at `cd-agent.pid`, logs at `cd-agent.log`).
 
@@ -30,28 +33,46 @@ On the Linux server: copy `cd-agent-linux`, `config.yaml`, `start.sh`, `stop.sh`
 
 ## Architecture
 
-The agent is a single HTTP server exposing one authenticated endpoint: `POST /api/v1/deploy`.
+The agent is a single HTTP server exposing the deploy webhook (`POST /api/v1/deploy`), a set of read-only UI API endpoints (`GET /api/v1/ui/...`), and an embedded static SPA served at `/`.
 
 **Package layout:**
 
 ```
-main.go          – flag parsing (-port, -config), slog setup, HTTP server wiring
+main.go          – flag/env parsing (-port/PORT, -config/CONFIG_PATH), slog setup, store + deployer wiring,
+                   route registration, embedded web/ SPA via //go:embed
 config/          – YAML loader; validates api_token and that every project has working_directory
-api/             – HTTP layer only (auth middleware + request handler)
-deployer/        – deployment orchestration (image pull → gdown → tar load → deploy command)
+api/             – HTTP layer only: auth middleware, deploy handler, and UI API handlers (ui_handler.go)
+deployer/        – deployment orchestration (image pull → gdown → tar load → .env → deploy command)
 executor/        – thin wrappers around os/exec
+store/           – in-memory, thread-safe deployment history (records + logs) consumed by the UI
+web/             – static single-page app (index.html), embedded into the binary
 ```
+
+**Configuration precedence (main.go):** flags `-port`/`-config` set defaults, then env vars `PORT` / `CONFIG_PATH` override them when set (`getenvOrDefault`).
+
+**Routes** (every `/api/...` route is wrapped in `AuthMiddleware`; `/` is unauthenticated so the login page can load before a token is supplied):
+
+| Method & path | Handler | Purpose |
+|---------------|---------|---------|
+| `POST /api/v1/deploy` | `DeployHandler` | Webhook that triggers a deployment |
+| `GET /api/v1/ui/health` | `UIHealthHandler` | Agent health + uptime since process start |
+| `GET /api/v1/ui/deployments` | `UIDeploymentsHandler` | All deployment records + aggregate stats |
+| `GET /api/v1/ui/deployments/{id}` | `UIDeploymentDetailHandler` | One record including its log lines |
+| `GET /api/v1/ui/projects` | `UIProjectsHandler` | Configured projects and their service names |
+| `GET /` | `http.FileServer` | Embedded SPA (`web/index.html`) |
 
 **Request flow:**
 
 1. `AuthMiddleware` validates the `Bearer` token against `config.yaml:api_token`.
 2. `DeployHandler` parses the JSON payload, resolves `workDir` and `deployCommand` from config (service-level overrides project-level), fires `go d.Deploy(...)`, immediately returns `202 Accepted`.
-3. `deployer.DefaultDeployer.Deploy` runs these steps sequentially (each step is skipped if its field is empty):
+3. `deployer.DefaultDeployer.Deploy` first adds a `running` `store.DeployRecord`, then runs these steps sequentially (each step is skipped if its field is empty), appending each step's output to the record's logs, and finally marks the record `success`/`failed`:
    - `image` set → `executor.PullImage` → `docker pull <image>`
    - `gdrive_file_id` set → `executor.DownloadGdown` → `gdown <file_id> -O <tar_path>`
    - `tar_path` set → `executor.LoadTarImage` → `docker load -i <tar_path>`
    - `image` + `service` both set → `updateEnvFile` → writes `SERVICE_IMAGE=<image>` to `<workDir>/.env`
    - always → `executor.RunShellCommand` → `sh -c "<deploy_command>"`
+
+The store passed to `deployer.New` is nil-safe: if `nil`, `Deploy` runs identically but records nothing.
 
 ---
 
@@ -105,6 +126,44 @@ These are the four functions in `executor/executor.go`. All use `exec.Command` d
 **Command injection boundary:**
 - `RunCommand` / `PullImage` / `LoadTarImage` / `DownloadGdown` — safe to call with HTTP payload data; args pass directly to `exec.Command`.
 - `RunShellCommand` — **only** for `deploy_command` from `config.yaml`. Never pass payload data here.
+
+---
+
+## Deployment History (store package)
+
+`store/store.go` keeps every deployment run in memory (lost on restart — there is no persistence). It is wired in `main.go` via `store.New()` and passed to both the deployer (writes) and the UI handlers (reads).
+
+**Types & functions:**
+
+| Symbol | Signature | Purpose |
+|--------|-----------|---------|
+| `store.New` | `() *Store` | Create an empty store. |
+| `Store.Add` | `(r *DeployRecord)` | Append a record (also indexes it by ID). |
+| `Store.Get` | `(id string) *DeployRecord` | Live pointer by ID, or `nil`. |
+| `Store.List` | `() []DeployRecord` | Snapshots of all records, **newest first**. |
+| `store.GenerateID` | `() string` | Random UUID v4 used as the record ID. |
+| `DeployRecord.AppendLog` | `(line string)` | Append one log line (mutex-guarded). |
+| `DeployRecord.Complete` | `(success bool, endTime time.Time)` | Set terminal status + end time. |
+| `DeployRecord.Snapshot` | `() DeployRecord` | Lock-free copy safe to serialize. |
+
+**Status constants:** `StatusRunning` / `StatusSuccess` / `StatusFailed`.
+
+Concurrency: each `DeployRecord` has its own `sync.Mutex` (guards `Logs`, `Status`, `EndTime`); the `Store` has a `sync.RWMutex` over its slice + index. Always serialize via `Snapshot()` rather than reading fields directly while a deploy goroutine may still be writing.
+
+---
+
+## UI API Handlers (api/ui_handler.go)
+
+Read-only JSON endpoints backing the SPA. All are registered behind `AuthMiddleware` in `main.go`.
+
+| Handler | Constructor | Returns |
+|---------|-------------|---------|
+| `UIHealthHandler` | `(startTime time.Time) http.Handler` | `{status, uptime_seconds, started_at}` |
+| `UIDeploymentsHandler` | `(s *store.Store) http.Handler` | `{deployments[], total, stats{total,success,failed,running,success_rate,avg_duration_seconds}}` |
+| `UIDeploymentDetailHandler` | `(s *store.Store) http.Handler` | One record incl. `logs[]`; `404 {"error":"not found"}` for unknown `{id}` |
+| `UIProjectsHandler` | `(cfg *config.Config) http.Handler` | `{projects:[{name, services[]}]}`, both sorted alphabetically |
+
+`success_rate` is computed over *finished* deploys only (success / (success+failed)), rounded to one decimal; `avg_duration_seconds` averages only completed records.
 
 ---
 

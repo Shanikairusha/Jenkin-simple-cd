@@ -61,7 +61,9 @@ func (d *DefaultDeployer) Deploy(req Request) {
 
 	success := true
 
-	if req.Image != "" {
+	// If the deployment is delivered via tar/gdrive, skip registry pull
+	// because the image may not exist in the registry yet.
+	if req.Image != "" && req.GdriveFileID == "" && req.TarPath == "" {
 		out, err := executor.PullImage(req.WorkDir, req.Image)
 		if err != nil {
 			log.Error("failed to pull image", "error", err)

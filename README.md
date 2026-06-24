@@ -43,6 +43,13 @@ chmod +x cd-agent-linux start.sh stop.sh
 ./stop.sh           # stops the daemon
 ```
 
+The agent listens on port `8080` by default. Override with the `-port` / `-config` flags or the `PORT` / `CONFIG_PATH` environment variables (env vars take precedence):
+
+```bash
+./cd-agent-linux -port 9090 -config /etc/cd-agent/config.yaml
+PORT=9090 CONFIG_PATH=/etc/cd-agent/config.yaml ./cd-agent-linux
+```
+
 ---
 
 ## Configuration
@@ -210,6 +217,31 @@ nano .env
 docker compose up -d --no-deps pd-ms-auth-service
 # Docker Compose detects the image change and recreates the container
 ```
+
+---
+
+## Web Dashboard
+
+The agent serves a single-page dashboard at `http://<VM_IP>:8080/`. The SPA is embedded into the binary (`//go:embed web`), so nothing extra needs to be copied to the server. The page is served unauthenticated (so it can load a login form), but every data endpoint it calls requires the same `Bearer` token as the webhook.
+
+### UI API endpoints
+
+All require `Authorization: Bearer <api_token>` and return JSON.
+
+| Method & path | Returns |
+|---------------|---------|
+| `GET /api/v1/ui/health` | `{ "status": "healthy", "uptime_seconds": 1234, "started_at": "..." }` |
+| `GET /api/v1/ui/deployments` | All deployment records (newest first) plus aggregate `stats` (total, success, failed, running, `success_rate`, `avg_duration_seconds`) |
+| `GET /api/v1/ui/deployments/{id}` | A single deployment record including its captured `logs` (`404` if the ID is unknown) |
+| `GET /api/v1/ui/projects` | Configured projects and their service names, alphabetically sorted |
+
+**Example:**
+```bash
+curl -s http://<VM_IP>:8080/api/v1/ui/deployments \
+  -H "Authorization: Bearer your-super-secret-token" | jq
+```
+
+> Deployment history is kept **in memory only** — it is cleared whenever the agent restarts. Each `POST /api/v1/deploy` creates one record that starts as `running`, accumulates per-step logs (pull/gdown/load/env/deploy), and ends as `success` or `failed`.
 
 ---
 
